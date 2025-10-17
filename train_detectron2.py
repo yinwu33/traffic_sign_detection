@@ -2,10 +2,26 @@
 import json, os, random, math
 import cv2
 import torch
+from functools import lru_cache
+from datetime import datetime
+from pathlib import Path
 from detectron2.structures import BoxMode
 from detectron2.data import DatasetCatalog, MetadataCatalog
 
 
+OUTPUT_DIR = "./output"
+BATCH_SIZE = 16
+LABELS = [
+    "unknown_traffic_sign",
+]
+NUM_EPOCHS = 10
+LR = 1e-4
+NUM_WORKERS = 14
+
+MODEL_CONFIG = "COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml"
+
+
+@lru_cache(maxsize=None)
 def load_myjson(json_path):
     with open(json_path, "r") as f:
         data = json.load(f)
@@ -49,7 +65,13 @@ def register_my_dataset(name, json_path, thing_classes):
     )
 
 
-def split_and_save(json_in, train_out, val_out, val_ratio=0.1, seed=42):
+def split_and_save(
+    json_in,
+    train_out,
+    val_out,
+    val_ratio=0.1,
+    seed=42,
+):
     random.seed(seed)
     with open(json_in, "r") as f:
         data = json.load(f)
@@ -131,6 +153,43 @@ class VisualizationHook(hooks.HookBase):
                 save_path = os.path.join(self.output_dir, file_name)
                 cv2.imwrite(save_path, vis_image[:, :, ::-1])
 
+                # Also save ground truth visualization for comparison
+                gt_visualizer = Visualizer(
+                    image[:, :, ::-1],
+                    metadata=self.metadata,
+                    scale=1.0,
+                )
+                gt_image = gt_visualizer.draw_dataset_dict(sample).get_image()
+                gt_file_name = f"epoch_{epoch_idx:04d}_sample_{sample_idx:02d}_gt.jpg"
+                gt_save_path = os.path.join(self.output_dir, gt_file_name)
+                cv2.imwrite(gt_save_path, gt_image[:, :, ::-1])
+
+
+def setup_cfg(
+    model_config: str,
+    output_dir: str,
+    thing_classes,
+    ims_per_batch=32,
+    base_lr=0.00025,
+    max_iter=30000,
+    num_workers=8,
+):
+    cfg = get_cfg()
+    cfg.merge_from_file(model_zoo.get_config_file(model_config))
+    cfg.DATASETS.TRAIN = ("zod_train",)
+    cfg.DATASETS.TEST = ("zod_val",)
+    cfg.DATALOADER.NUM_WORKERS = num_workers
+    cfg.SOLVER.IMS_PER_BATCH = ims_per_batch
+    cfg.SOLVER.BASE_LR = base_lr
+    cfg.SOLVER.MAX_ITER = max_iter
+    cfg.SOLVER.STEPS = []  # 简单起见，先不做学习率衰减
+    cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128
+    cfg.MODEL.ROI_HEADS.NUM_CLASSES = len(thing_classes)  # 重要：与你的类别数匹配
+    cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(model_config)
+    cfg.OUTPUT_DIR = output_dir
+
+    return cfg
+
 
 def train(
     train_json,
@@ -141,42 +200,34 @@ def train(
     base_lr=0.00025,
     max_iter=30000,
     num_workers=8,
+    model_config: str = MODEL_CONFIG,
 ):
-    # 注册两个数据集
-    register_my_dataset("my_train", train_json, list(thing_classes))
-    register_my_dataset("my_val", val_json, list(thing_classes))
+    # dataset registration
+    register_my_dataset("zod_train", train_json, list(thing_classes))
+    register_my_dataset("zod_val", val_json, list(thing_classes))
 
-    cfg = get_cfg()
-    cfg.merge_from_file(
-        model_zoo.get_config_file("COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml")
+    cfg = setup_cfg(
+        model_config=model_config,
+        output_dir=output_dir,
+        thing_classes=thing_classes,
+        ims_per_batch=ims_per_batch,
+        base_lr=base_lr,
+        max_iter=max_iter,
+        num_workers=num_workers,
     )
-    cfg.DATASETS.TRAIN = ("my_train",)
-    cfg.DATASETS.TEST = ("my_val",)
-    cfg.DATALOADER.NUM_WORKERS = num_workers
-    cfg.SOLVER.IMS_PER_BATCH = ims_per_batch
-    cfg.SOLVER.BASE_LR = base_lr
-    cfg.SOLVER.MAX_ITER = max_iter
-    cfg.SOLVER.STEPS = []  # 简单起见，先不做学习率衰减
-    cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128
-    cfg.MODEL.ROI_HEADS.NUM_CLASSES = len(thing_classes)  # 重要：与你的类别数匹配
-    cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(
-        "COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml"
-    )
-    cfg.OUTPUT_DIR = output_dir
+
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
 
-    train_dataset_size = len(DatasetCatalog.get("my_train"))
-    iterations_per_epoch = max(
-        1, math.ceil(train_dataset_size / cfg.SOLVER.IMS_PER_BATCH)
-    )
+    n_train = len(DatasetCatalog.get("zod_train"))
+    iterations_per_epoch = max(1, math.ceil(n_train / cfg.SOLVER.IMS_PER_BATCH))
 
-    # 开始训练
+    # start
     trainer = DefaultTrainer(cfg)
     trainer.register_hooks(
         [
             VisualizationHook(
                 cfg=cfg,
-                dataset_name="my_val",
+                dataset_name="zod_val",
                 output_dir=cfg.OUTPUT_DIR,
                 period=iterations_per_epoch,
                 samples_per_epoch=1,
@@ -188,7 +239,7 @@ def train(
 
 
 if __name__ == "__main__":
-    # 例子：先把一个总 JSON 切分为 train/val
+    # split train / val
     total_json = "zod_traffic_sign_de.json"
     train_json = "zod_traffic_sign_de_train.json"
     val_json = "zod_traffic_sign_de_val.json"
@@ -196,16 +247,22 @@ if __name__ == "__main__":
     if not (os.path.exists(train_json) and os.path.exists(val_json)):
         split_and_save(total_json, train_json, val_json, val_ratio=0.1)
 
-    # 类别名请自行替换（顺序需与 category_id 对应）
-    thing_classes = ("unknown_traffic_sign",)  # 例如只有1类，就写一个名字
+    output_dir = Path(
+        f"./{OUTPUT_DIR}/{datetime.now().strftime('%Y%m%d_%H%M%S')}_frcnn_r50"
+    )
+
+    n_train = len(load_myjson(train_json))
+    n_val = len(load_myjson(val_json))
+
+    max_iter = NUM_EPOCHS * math.ceil(n_train / BATCH_SIZE)
 
     train(
         train_json=train_json,
         val_json=val_json,
-        output_dir="./output_frcnn_r50",
-        thing_classes=thing_classes,
-        ims_per_batch=8,
-        base_lr=0.00025,
-        max_iter=10000,
-        num_workers=4,
+        output_dir=output_dir,
+        thing_classes=LABELS,
+        ims_per_batch=BATCH_SIZE,
+        base_lr=LR,
+        max_iter=max_iter,
+        num_workers=NUM_WORKERS,
     )
