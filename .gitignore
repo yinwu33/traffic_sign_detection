@@ -3,3 +3,7 @@
 /output*
 /zod*.json
 /labels.json
+/*.png
+/statistic/*.png
+/*.jpg
+*.csv
