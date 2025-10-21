@@ -1,7 +1,9 @@
 /data
 /.vscode
 /output*
-/zod*.json
+/zod*train.json
+/zod*val.json
+/zod_traffic_sign_de.json
 /labels.json
 /*.png
 /statistic/*.png
