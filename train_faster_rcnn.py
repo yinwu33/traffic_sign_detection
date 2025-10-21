@@ -201,7 +201,7 @@ if __name__ == "__main__":
     val_json = "zod_traffic_sign_de_cleaned_val.json"
 
     if not (os.path.exists(train_json) and os.path.exists(val_json)):
-        dataset_split(total_json, train_json, val_json, val_ratio=0.1)
+        dataset_split(total_json, val_ratio=0.1)
 
     cfg = setup_cfg()
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)

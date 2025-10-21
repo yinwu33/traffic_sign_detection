@@ -1,6 +1,4 @@
-ultralytics>=8.1.0
-datasets>=2.14.0
-pyyaml>=6.0
-tqdm>=4.65.0
-numpy>=1.23.0
-Pillow>=9.5.0
+# torch
+matplotlib
+detectron2 @ git+https://github.com/facebookresearch/detectron2.git
+tqdm
