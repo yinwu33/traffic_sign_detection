@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from detectron2.structures import BoxMode
 from detectron2.data import DatasetCatalog, MetadataCatalog
+import argparse
 
 
 OUTPUT_DIR = "./output"
@@ -300,6 +301,7 @@ def train(
     max_iter=30000,
     num_workers=8,
     model_config: str = MODEL_CONFIG,
+    resume_from=None,
 ):
     # dataset registration
     register_my_dataset("zod_train", train_json, list(thing_classes))
@@ -314,6 +316,10 @@ def train(
         max_iter=max_iter,
         num_workers=num_workers,
     )
+
+    # 如果提供了 resume 的 checkpoint，则用它覆盖初始权重，恢复优化器/调度器等
+    if resume_from:
+        cfg.MODEL.WEIGHTS = str(resume_from)
 
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
 
@@ -335,11 +341,21 @@ def train(
             )
         ]
     )
-    trainer.resume_or_load(resume=False)
+    trainer.resume_or_load(resume=bool(resume_from))
     trainer.train()
 
 
 if __name__ == "__main__":
+    # CLI 参数：可选传入 resume 的 checkpoint 路径
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default="",
+        help="Path to a Detectron2 training checkpoint (.pth) to resume from",
+    )
+    args = parser.parse_args()
+
     # split train / val
     # total_json = "zod_traffic_sign_de.json"
     # train_json = "zod_traffic_sign_de_train.json"
@@ -372,4 +388,5 @@ if __name__ == "__main__":
         base_lr=LR,
         max_iter=max_iter,
         num_workers=NUM_WORKERS,
+        resume_from=args.resume_from or None,
     )
