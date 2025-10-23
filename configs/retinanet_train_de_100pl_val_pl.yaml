@@ -18,7 +18,7 @@ INPUT:
   MAX_SIZE_TEST: 0
   RANDOM_FLIP: "horizontal"
   CROP:
-    ENABLED: False  # 对小目标检测，通常不推荐随机裁剪
+    ENABLED: False # 对小目标检测，通常不推荐随机裁剪
 
 # ------------------------------------------------------
 # MODEL
@@ -26,7 +26,7 @@ INPUT:
 MODEL:
   # 切换为 RetinaNet 的预训练权重
   WEIGHTS: "detectron2://COCO-Detection/retinanet_R_50_FPN_3x/137849486/model_final_4cafe0.pkl"
-  
+
   # ANCHOR_GENERATOR 设置对 RetinaNet 同样适用
   ANCHOR_GENERATOR:
     # 保持你为小目标优化的 SIZES，从 8 开始
@@ -36,15 +36,15 @@ MODEL:
 
   # RetinaNet 特定的配置
   RETINANET:
-    NUM_CLASSES: 1  # 你的二分类任务
-    
+    NUM_CLASSES: 1 # 你的二分类任务
+
     # 将 SCORE_THRESH_TEST 从 ROI_HEADS 移到这里
     SCORE_THRESH_TEST: 0.3
-    
+
     # 注意：RetinaNet 的 NMS 阈值。
     # 你在 Faster R-CNN 中设置的 0.05 非常低，可能是个笔误。
     # RetinaNet 的默认值 0.5 通常更合理。
-    NMS_THRESH_TEST: 0.5 
+    NMS_THRESH_TEST: 0.5
 
   # --- 以下是 Faster R-CNN 的配置，在 RetinaNet 中不需要 ---
   # RPN: ... (移除)
@@ -56,7 +56,7 @@ MODEL:
 # DATASETS
 # ------------------------------------------------------
 DATASETS:
-  TRAIN: ("zod_traffic_sign_DE_train",)
+  TRAIN: ("zod_traffic_sign_DE_train", "zod_traffic_sign_PL_train")
   TEST: ("zod_traffic_sign_DE_val","zod_traffic_sign_PL_val")
 
 # ------------------------------------------------------
@@ -70,24 +70,24 @@ DATALOADER:
 # ------------------------------------------------------
 SOLVER:
   IMS_PER_BATCH: 8
-  
+
   # 注意：RetinaNet 的标准 LR 是 0.01 (b=16)。
   # 你的 0.00025 是一个非常低的学习率，适用于 finetune。
   # 这里我保留了你的设置。
-  BASE_LR: 0.00025 
-  
-  MAX_ITER: 50000 
+  BASE_LR: 0.00025
+
+  MAX_ITER: 50000
   STEPS: [30000, 40000, 45000] # 学习率衰减点
-  
+
   AMP:
-    ENABLED: True  # 开启混合精度训练
-  
+    ENABLED: True # 开启混合精度训练
+
   CHECKPOINT_PERIOD: 5000
- 
+
 # ------------------------------------------------------
 # TEST & OUTPUT
 # ------------------------------------------------------
 TEST:
   EVAL_PERIOD: 5000
 
-OUTPUT_DIR: "./output_retinanet"  # 建议为 RetinaNet 换一个新的输出目录
+OUTPUT_DIR: "./output_retinanet" # 建议为 RetinaNet 换一个新的输出目录

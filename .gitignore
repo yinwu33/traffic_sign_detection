@@ -11,3 +11,4 @@
 *.csv
 /domain_shift_output
 __pycache__
+*.pyc
