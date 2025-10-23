@@ -104,7 +104,7 @@ def main(
     with open(f"zod_traffic_sign_{cc}.json", "w") as f:
         json.dump(metadata_all, f)
 
-    with open(f"label_{cc}.json", "w") as f:
+    with open(f"statistic/label_{cc}.json", "w") as f:
         json.dump(ts_classes, f, indent=2)
         
     if split:
