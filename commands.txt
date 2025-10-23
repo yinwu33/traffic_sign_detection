@@ -2,4 +2,4 @@
 python scripts/create_detectron2_json_from_zod.py --cc DE --min-length 15 --split
 
 # training
-python train_retinanet.py --cfg /home/tjhu78u/workspace/traffic_sign_detection/configs/retinanet_train_de_val_pl.yaml --mode train --num-gpus 4
+python train_retinanet.py --cfg configs/random/retinanet_train_de_val_pl.yaml --mode train --num-gpus 4
