@@ -30,10 +30,6 @@ BATCH_SIZE = 8  # for amp + 48 GB GPU memory
 LABELS = [
     "ts",
 ]
-NUM_EPOCHS = 20
-BASE_LR = 1e-5
-NUM_WORKERS = 14
-
 
 DATASET_METADATA_DIR = "./data/metadata"
 
