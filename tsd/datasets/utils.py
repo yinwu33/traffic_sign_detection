@@ -8,6 +8,12 @@ from functools import lru_cache
 def load_dataset_json(json_fpath: str):
     with open(json_fpath, "r") as f:
         dataset_dicts = json.load(f)
+    for item_dict in dataset_dicts:
+        if item_dict["file_name"].startswith("/mnt/disk/"):
+            item_dict["file_name"] = item_dict["file_name"].replace(
+                "/mnt/disk/data/public/zod", "data"
+            )
+
     return dataset_dicts
 
 
