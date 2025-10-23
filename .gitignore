@@ -9,3 +9,5 @@
 /statistic/*.png
 /*.jpg
 *.csv
+/domain_shift_output
+__pycache__
