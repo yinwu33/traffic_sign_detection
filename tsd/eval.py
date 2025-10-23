@@ -7,6 +7,7 @@ from detectron2.structures import BoxMode
 from detectron2.data import DatasetCatalog
 from collections import defaultdict
 
+
 # --- custom evaluator ---
 class BinaryAPBySizeEvaluator(DatasetEvaluator):
     """
@@ -201,58 +202,50 @@ class BinaryAPBySizeEvaluator(DatasetEvaluator):
         return tp_flags, matched_gt
 
     def evaluate(self) -> Dict[str, float]:
-        # --- 汇总整体 ---
-        all_scores: List[float] = []
-        all_tp: List[int] = []
+        all_scores, all_tp = [], []
         total_gt = 0
 
-        # 分桶容器
         bucket_scores = {0: [], 1: [], 2: []}
-        bucket_tp = {0: [], 1: [], 2: []}
+        bucket_tp     = {0: [], 1: [], 2: []}
         bucket_gt_counts = {0: 0, 1: 0, 2: 0}
 
-        # 统计哪些图片用于每个桶（近似 COCO：只在包含该桶GT的图片上做评估）
-        imgs_with_bucket = {0: [], 1: [], 2: []}
         for rec in self._records:
-            for b in (0, 1, 2):
-                if np.any(rec["gt_bucket"] == b):
-                    imgs_with_bucket[b].append(True)
-                else:
-                    imgs_with_bucket[b].append(False)
-
-        # 遍历每张图，做匹配
-        for idx, rec in enumerate(self._records):
-            gt_boxes = rec["gt_boxes"]
+            gt_boxes   = rec["gt_boxes"]
+            gt_bucket  = rec["gt_bucket"]
             pred_boxes = rec["pred_boxes"]
-            scores = rec["scores"]
-            tp_flags, matched_idx = self._match_per_image(pred_boxes, scores, gt_boxes)
+            scores     = rec["scores"]
 
-            # 整体
+            # --- overall：不做尺寸过滤 ---
+            tp_flags, matched_idx = self._match_per_image(pred_boxes, scores, gt_boxes)
             all_scores.extend(scores.tolist())
             all_tp.extend(tp_flags.tolist())
-            total_gt += len(gt_boxes)
+            total_gt += len(gt_boxes)   # ← 别漏了这句！
 
-            # 分桶：只在“该桶存在 GT 的图片”上统计，并且只把匹配到该桶 GT 的预测作为 TP；
-            # 其余未匹配或匹配到其它桶的预测，视为该桶的 FP。
-            gt_bucket = rec["gt_bucket"]
+            # --- buckets：按 COCO 风格过滤预测与 GT ---
+            pred_bucket = self._bucket_ids_for_boxes(pred_boxes)
             for b in (0, 1, 2):
-                if self._ignore_images_without_bucket_gt and not np.any(gt_bucket == b):
-                    continue  # 忽略无该桶GT的图片
-                # 该图像该桶的GT数量
+                # 该桶的 GT 数量（分母）
                 bucket_gt_counts[b] += int(np.sum(gt_bucket == b))
 
-                # 为该桶构造 tp/fp 列表：
-                #  - 匹配到该桶GT的标记为 TP
-                #  - 否则为 FP（包括未匹配或匹配到其他桶的）
-                # 这样能得到符合直觉的 PR 曲线
-                is_tp_b = np.zeros_like(tp_flags)
-                for k, mj in enumerate(matched_idx):
-                    if mj >= 0 and gt_bucket[mj] == b and tp_flags[k] == 1:
-                        is_tp_b[k] = 1
-                bucket_scores[b].extend(scores.tolist())
+                # 只取该桶的预测来画 PR（其它尺寸的预测在该桶里应被忽略）
+                mask = (pred_bucket == b)
+                if not np.any(mask):
+                    continue
+
+                sel_idx = np.where(mask)[0]
+                is_tp_b = np.zeros(len(sel_idx), dtype=np.int8)
+                for j, pidx in enumerate(sel_idx):
+                    mj = matched_idx[pidx]
+                    if (mj >= 0) and (tp_flags[pidx] == 1) and (gt_bucket[mj] == b):
+                        is_tp_b[j] = 1
+
+                bucket_scores[b].extend(scores[mask].tolist())
                 bucket_tp[b].extend(is_tp_b.tolist())
 
-        # 计算 AP
+        # （可选）稳妥起见，用桶的 GT 和总体做一次一致性校验
+        # total_gt_check = sum(bucket_gt_counts.values())
+        # assert total_gt == total_gt_check, (total_gt, total_gt_check)
+
         metrics = {}
         metrics["AP"] = self._ap_from_scores_tpfp(
             np.array(all_scores, dtype=np.float32),
@@ -262,17 +255,17 @@ class BinaryAPBySizeEvaluator(DatasetEvaluator):
 
         name_map = {0: "AP_s", 1: "AP_m", 2: "AP_l"}
         for b in (0, 1, 2):
-            ap_b = self._ap_from_scores_tpfp(
+            metrics[name_map[b]] = self._ap_from_scores_tpfp(
                 np.array(bucket_scores[b], dtype=np.float32),
                 np.array(bucket_tp[b], dtype=np.int8),
                 bucket_gt_counts[b],
             )
-            metrics[name_map[b]] = ap_b
 
-        print(
-            {
-                k: (None if (isinstance(v, float) and np.isnan(v)) else float(v))
-                for k, v in metrics.items()
-            }
-        )
+        # 规范化 NaN 输出
+        metrics = {
+            k: (None if (isinstance(v, float) and np.isnan(v)) else float(v))
+            for k, v in metrics.items()
+        }
+        print(metrics)
         return metrics
+

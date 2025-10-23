@@ -1,25 +1,21 @@
 # train_retinanet_ddp.py — Detectron2 RetinaNet training with single- or multi-GPU (DDP)
 # - Drop-in replacement for your original script.
 # - Keeps single-GPU behavior by default; add --num-gpus > 1 for multi-GPU.
-
-import warnings
-
-warnings.filterwarnings("ignore", category=FutureWarning)
-
-import os
-import argparse
+import os, json, os, argparse, warnings
 from datetime import datetime
 from pathlib import Path
 
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import torch
 from detectron2 import model_zoo
+from detectron2.data import DatasetCatalog, MetadataCatalog, build_detection_test_loader
+from detectron2.utils import comm
 from detectron2.config import get_cfg
 from detectron2.engine import DefaultTrainer, launch
-from detectron2.data import DatasetCatalog, MetadataCatalog, build_detection_test_loader
-from detectron2.evaluation import inference_on_dataset
 from detectron2.modeling import build_model
+from detectron2.evaluation import inference_on_dataset, DatasetEvaluators
 from detectron2.checkpoint import DetectionCheckpointer
-from detectron2.utils import comm
 
 # ---- your project-specific imports ----
 from tsd.hooks import VisualizationHook
@@ -39,7 +35,7 @@ def register_my_dataset(name: str, json_fpath: str, labels: list[str]):
     DatasetCatalog.register(name, lambda: dataset_dicts)
     MetadataCatalog.get(name).set(
         json_file=json_fpath,
-        evaluator_type="coco",
+        evaluator_type="tsd_binary",
         thing_classes=labels,
     )
 
@@ -59,6 +55,32 @@ class MyTrainer(DefaultTrainer):
                 )
             )
         return hooks_list
+
+    @classmethod
+    def build_evaluator(cls, cfg, dataset_name, output_folder=None):
+        ev_type = MetadataCatalog.get(dataset_name).evaluator_type
+        evals = []
+        if ev_type == "tsd_binary":
+            evals.append(
+                BinaryAPBySizeEvaluator(
+                    dataset_name,
+                    iou_thresh=0.5,
+                    size_mode="area",
+                    small_thr=32,
+                    large_thr=96,
+                    class_id=0,
+                    ignore_images_without_bucket_gt=True,
+                )
+            )
+            # 如需再加 COCO 指标，可在这里条件性叠加 COCOEvaluator（前提：你也有 COCO 兼容的标注）
+            # evals.append(COCOEvaluator(dataset_name, cfg, True, output_folder))
+        elif ev_type == "coco":
+            from detectron2.evaluation import COCOEvaluator
+
+            evals.append(COCOEvaluator(dataset_name, cfg, True, output_folder))
+        else:
+            raise NotImplementedError(f"Unsupported evaluator_type={ev_type}")
+        return evals[0] if len(evals) == 1 else DatasetEvaluators(evals)
 
 
 def do_train(cfg, resume_from=None):
@@ -104,8 +126,32 @@ def do_trace(cfg, resume_from=None):
     print(f"[trace] Traced model saved to: {export_path}")
 
 
-def do_eval(cfg, resume_from):
-    # Evaluate only on rank-0; Detectron2 eval will handle sync if needed
+def build_my_evaluator(cfg, dataset_name):
+    """给某个 dataset_name 构建 evaluator，支持叠加多个评估器"""
+    evals = []
+
+    # 你的二分类按目标尺寸评估
+    evals.append(
+        BinaryAPBySizeEvaluator(
+            dataset_name=dataset_name,
+            iou_thresh=0.5,
+            size_mode="area",
+            small_thr=32,
+            large_thr=96,
+            class_id=0,
+            ignore_images_without_bucket_gt=True,
+        )
+    )
+
+    # 如需同时输出 COCO AP，可以加上：
+    # evals.append(COCOEvaluator(dataset_name, output_dir=cfg.OUTPUT_DIR))
+
+    if len(evals) == 1:
+        return evals[0]
+    return DatasetEvaluators(evals)
+
+
+def do_eval(cfg, resume_from=None):
     if resume_from:
         cfg.MODEL.WEIGHTS = str(resume_from)
 
@@ -113,25 +159,28 @@ def do_eval(cfg, resume_from):
     model.eval()
     DetectionCheckpointer(model).load(cfg.MODEL.WEIGHTS)
 
-    evaluator = BinaryAPBySizeEvaluator(
-        cfg.DATASETS.VAL[0],
-        iou_thresh=0.5,
-        size_mode="area",
-        small_thr=32,
-        large_thr=96,
-        class_id=0,
-        ignore_images_without_bucket_gt=True,
-    )
-    val_loader = build_detection_test_loader(cfg, cfg.DATASETS.VAL[0])
+    # 用 TEST 列表（更符合 Detectron2 习惯）
+    datasets = list(cfg.DATASETS.TEST)
+    all_results = {}
 
-    results = inference_on_dataset(model, val_loader, evaluator)
+    for ds_name in datasets:
+        evaluator = build_my_evaluator(cfg, ds_name)
+        loader = build_detection_test_loader(
+            cfg,
+            ds_name,
+            batch_size=cfg.SOLVER.IMS_PER_BATCH,
+            num_workers=cfg.DATALOADER.NUM_WORKERS,
+        )
+        results = inference_on_dataset(model, loader, evaluator)
+        all_results[ds_name] = results
+
+        if comm.is_main_process():
+            print(f"[eval] {ds_name}: {results}")
+
     if comm.is_main_process():
-        print("[eval] Evaluation results:", results)
         os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
-        import json
-
         with open(os.path.join(cfg.OUTPUT_DIR, "eval_results.json"), "w") as f:
-            json.dump(results, f, indent=2)
+            json.dump(all_results, f, indent=2)
 
 
 def build_cfg(user_cfg_path: str):
