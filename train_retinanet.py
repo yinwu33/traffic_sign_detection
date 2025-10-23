@@ -83,22 +83,19 @@ class MyTrainer(DefaultTrainer):
         return evals[0] if len(evals) == 1 else DatasetEvaluators(evals)
 
 
-def do_train(cfg, resume_from=None):
-    if resume_from:
-        cfg.MODEL.WEIGHTS = str(resume_from)
-
+def do_train(cfg, resume=None):
     trainer = MyTrainer(cfg)
-    trainer.resume_or_load(resume=bool(resume_from))
+    trainer.resume_or_load(resume)
     trainer.train()
 
 
-def do_trace(cfg, resume_from=None):
+def do_trace(cfg, load_from=None):
     # Only run tracing on rank-0 to avoid duplicate work
     if not comm.is_main_process():
         return
 
-    if resume_from:
-        cfg.MODEL.WEIGHTS = resume_from
+    if load_from:
+        cfg.MODEL.WEIGHTS = load_from
     cfg.MODEL.DEVICE = "cpu"  # tracing on CPU as in your original script
 
     try:
@@ -151,10 +148,7 @@ def build_my_evaluator(cfg, dataset_name):
     return DatasetEvaluators(evals)
 
 
-def do_eval(cfg, resume_from=None):
-    if resume_from:
-        cfg.MODEL.WEIGHTS = str(resume_from)
-
+def do_eval(cfg):
     model = build_model(cfg)
     model.eval()
     DetectionCheckpointer(model).load(cfg.MODEL.WEIGHTS)
@@ -214,9 +208,14 @@ def parse_args():
         "--mode", required=True, choices=["train", "trace", "eval"], help="Mode"
     )
     parser.add_argument(
-        "--resume-from", type=str, default="", help="Path to a .pth checkpoint"
+        "--load-from", type=str, default="", help="Path to a .pth checkpoint"
     )
-
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Whether to resume from the checkpoint",
+    )
     # DDP args — defaults keep single-GPU behavior
     parser.add_argument("--num-gpus", type=int, default=1, help="GPUs per machine")
     parser.add_argument(
@@ -251,13 +250,13 @@ def main_worker(args):
 
     # Train / Trace / Eval
     if args.mode == "train":
-        do_train(cfg, resume_from=args.resume_from or None)
+        do_train(cfg, resume=args.resume)
     elif args.mode == "trace":
-        do_trace(cfg, resume_from=args.resume_from or None)
+        do_trace(cfg, load_from=args.load_from or None)
     elif args.mode == "eval":
-        assert args.resume_from, "Evaluation requires a checkpoint to load from."
-        cfg.MODEL.WEIGHTS = args.resume_from
-        do_eval(cfg, resume_from=args.resume_from)
+        assert args.load_from, "Evaluation requires a checkpoint to load from."
+        cfg.MODEL.WEIGHTS = args.load_from
+        do_eval(cfg, load_from=args.load_from)
     else:
         raise ValueError(f"Unknown mode: {args.mode}")
 
